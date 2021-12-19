@@ -1,0 +1,87 @@
+import SmoReadError.{CannotOpenFile, SmoParseError}
+import cats.implicits._
+import com.monovore.decline.Opts._
+import com.monovore.decline._
+import better.files._
+import cats.Show
+
+import java.io.{FileReader, File => JFile}
+
+sealed trait SmoReadError {
+  def errorMessage: String
+}
+object SmoReadError {
+  case class CannotOpenFile(f: File) extends SmoReadError {
+    override def errorMessage: String = s"File could not be opened: $f"
+  }
+  case class SmoParseError(f: File, cause: String) extends SmoReadError{
+    override def errorMessage: String = s"Failed to parse file: ${f.pathAsString} because: $cause"
+  }
+}
+
+case class SMS(file: File, from: String, parts: Int, message: String)
+object SMS {
+  implicit object SMSShow extends Show[SMS] {
+    override def show(sms: SMS): String =
+      s"""file: ${sms.file.pathAsString}
+         |\tfrom = ${sms.from}
+         |\tparts = ${sms.parts}
+         |\tmessage = ${sms.message}
+         | """.stripMargin
+  }
+}
+
+object SmoReaderApp
+    extends CommandApp(
+      name = "smo-reader",
+      header = "SMO file reader",
+      main = {
+
+        val dirOpt: Opts[String] =
+          option[String]("directory", help = "directory to scan for .smo files", short = "d")
+
+        val verboseOpt: Opts[Boolean] =
+          Opts.flag(long = "verbose", help = "Be more verbose in the output", short = "v").orFalse
+
+        (dirOpt, verboseOpt).mapN { (dir, verbose) =>
+          val directory = File(dir)
+          if (!directory.isDirectory) {
+            System.err.println(s"$dir is not a directory")
+            System.exit(1)
+          }
+          SmoReader.run(directory, verbose)
+        }
+      }
+    )
+
+object SmoReader {
+
+  val processSmo: File => Either[SmoReadError, SMS] = f => {
+    if (!f.isReadable) Left(CannotOpenFile(f))
+    else {
+      f.fileReader.apply { reader =>
+        val charStream = LazyList.continually(reader.read()).takeWhile(_ != -1).map(_.toChar)
+        charStream.foreach(print)
+        println()
+        println("---")
+        Right(SMS(file = f, from = "tel no", parts = 3, message = "Here is some messages"))
+      }
+    }
+  }
+
+  def run(directory: File, verbose: Boolean): Unit = {
+    val smos = directory.list(_.extension.contains(".smo")).toVector.sortBy(_.nameWithoutExtension)
+    if (verbose) {
+      println(s"Scanning for SMO files in ${directory.pathAsString}")
+      println(s"Found ${smos.size} files:")
+    }
+    val (errors, messages): (Vector[SmoReadError], Vector[SMS]) = smos.map(processSmo).partitionEither(identity)
+    if (verbose) {
+      if (errors.nonEmpty) {
+        println(s"Encountered ${errors.size} errors:")
+        errors.foreach(e => println(e.errorMessage))
+      }
+    }
+    messages.foreach(message => println(message.show))
+  }
+}
