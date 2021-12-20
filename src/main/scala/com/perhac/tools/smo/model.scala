@@ -39,6 +39,25 @@ object SmsStatus {
   case object Unsent extends SmsStatus
 }
 
+sealed trait SegmentStatus
+object SegmentStatus {
+
+  def apply(i: Int): SegmentStatus =
+    i match {
+      case 0x01 => IncomingRead
+      case 0x03 => IncomingUnread
+      case 0x05 => OutgoingSent
+      case 0x07 => OutgoingUnsent
+      case _    => throw new IllegalArgumentException(s"Unrecognised Segment Status: $i")
+
+    }
+
+  case object IncomingRead extends SegmentStatus
+  case object IncomingUnread extends SegmentStatus
+  case object OutgoingSent extends SegmentStatus
+  case object OutgoingUnsent extends SegmentStatus
+}
+
 sealed trait AddressType
 case object InternationalAddressType extends AddressType
 case object LocalAddressType extends AddressType
@@ -52,16 +71,20 @@ object AddressType {
     }
 }
 
-case class SMS(file: File, from: String, meta: Meta, message: String)
+case class Segment(idx: Int, status: SegmentStatus, phoneNumber: String, message: String)
+
+case class SMS(file: File, meta: Meta, segments: List[Segment]) {
+  def phoneNumber: String = segments.head.phoneNumber
+}
 object SMS {
   implicit object SMSShow extends Show[SMS] {
     override def show(sms: SMS): String =
       s"""File: ${sms.file.pathAsString}
-         |\tFrom = ${sms.from}
+         |\tFrom = ${sms.phoneNumber}
          |\t${sms.meta.partsActual} of ${sms.meta.partsExpected} parts
          |\tSMS Type = ${sms.meta.smsType}, Status = ${sms.meta.smsStatus}
          |\tMessage =
-         |${sms.message}
+         |${sms.segments.map(_.message).mkString}
          | """.stripMargin
   }
 }

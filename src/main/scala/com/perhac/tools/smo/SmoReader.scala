@@ -7,24 +7,47 @@ import com.perhac.tools.smo.SmoReadError.SmoParseError
 
 import scala.util.Try
 
-class SmoReader(intStream: LazyList[Int], file: File) {
+class SmoReader(buffer: Array[Int], file: File) {
 
-  def readMeta(stream: LazyList[Int]): Either[SmoReadError, (Meta, LazyList[Int])] =
-    Try {
-      val expected #:: actual #:: smsType #:: smsStatus #:: tail = stream.drop(5)
-      (Meta(expected, actual, SmsType(smsType), SmsStatus(smsStatus)), tail)
-    }.toEither.leftMap(t => SmoParseError(file, t.getMessage))
+  private def debugBufferAt(offset: Int, length: Int): Unit = {
+    buffer.slice(offset, offset + length).foreach(c => print(f"$c%02X "))
+    println()
+  }
+  private def debugBuffer(buf: Array[Int], length: Int = 10): Unit = {
+    buf.slice(0, length).foreach(c => print(f"$c%02X "))
+    println()
+  }
 
-  def readFrom(stream: LazyList[Int], dropCount: Int): Either[SmoReadError, (String, LazyList[Int])] =
-    Try {
-      val address = stream.drop(dropCount)
-      val howMany = address.head
-      val addressType = AddressType(address.drop(1).head)
-      val bytesToRead = Math.ceil(howMany / 2).toInt
-      val fromBytes: LazyList[Int] = address.slice(2, bytesToRead + 2)
-      val telNum = fromBytes.foldLeft("")((tel, c) => tel + f"$c%02X".reverse)
-      (formatPhoneNumber(addressType, telNum), address.drop(2 + bytesToRead))
-    }.toEither.leftMap(t => SmoParseError(file, t.getMessage))
+  private def safePerform[A](block: => A): Either[SmoReadError, A] =
+    Try(block).toEither.leftMap(t => SmoParseError(file, t.getMessage))
+
+  def readMeta(): Either[SmoReadError, Meta] =
+    safePerform {
+      Meta(partsExpected = buffer(5), partsActual = buffer(6), SmsType(buffer(7)), SmsStatus(buffer(8)))
+    }
+
+  def readSegment(idx: Int, totalCount: Int): Either[SmoReadError, Segment] =
+    safePerform {
+      val segmentStart = 16 + (idx * 11 * 16)
+      val segmentStatus = SegmentStatus(buffer(segmentStart + 0)) // the very first byte of the segment, so +0
+      val skip = 2 + buffer(segmentStart + 1) + 3 //[status][len][1,2,3...len][dummy][dummy]
+      val addressType = AddressType(buffer(segmentStart + skip))
+      val phoneNumberSemiOctets = buffer(segmentStart + skip - 1)
+      val phoneNumberBytes = Math.ceil(phoneNumberSemiOctets / 2).toInt
+      val phoneStartIdx = segmentStart + skip + 1
+      val phoneNumber: Array[Int] = buffer.slice(phoneStartIdx, phoneStartIdx + phoneNumberBytes)
+      val telNum = phoneNumber.foldLeft("")((tel, c) => tel + f"$c%02X".reverse)
+      val formattedNumber = formatPhoneNumber(addressType, telNum)
+      val dummyBytes = 3
+      val messageLengthOffset = phoneStartIdx + phoneNumberBytes + dummyBytes
+      val messageLen = buffer(messageLengthOffset)
+      val dumbFillerLength = if (totalCount > 1) 7 else 0
+      val messageStart = messageLengthOffset + 1 + dumbFillerLength
+      val messageBytes = buffer.slice(messageStart, messageLengthOffset + messageLen + 1)
+      val message = messageBytes.foldLeft(new StringBuilder())(accumulate).toString
+
+      Segment(idx, segmentStatus, formattedNumber, message)
+    }
 
   val accumulate: (StringBuilder, Int) => StringBuilder = {
     case (sb, byte) =>
@@ -35,30 +58,16 @@ class SmoReader(intStream: LazyList[Int], file: File) {
       }
   }
 
-  def readMessage(stream: LazyList[Int], meta: Meta): Either[SmoReadError, String] = {
-    def readNextMessage(segStream: LazyList[Int], mb: StringBuilder): LazyList[Int] = {
-      segStream.take(10).foreach(c => print( f"$c%02X "))
-      println()
-      val messageStart = readFrom(segStream, 11).right.get._2
-      messageStart.takeWhile(_ != 0xff).foldLeft(mb)(accumulate)
-      messageStart.takeWhile(_ != 0xff)
-    }
-
+  def readMessage(buffer: Array[Int], meta: Meta): Either[SmoReadError, String] =
     Try {
-      val msg1 = if (meta.partsExpected > 1) stream.drop(11) else stream.drop(4)
+      val msg1 = if (meta.partsExpected > 1) buffer.drop(11) else buffer.drop(4)
       val messageBuilder = msg1.takeWhile(_ != 0xff).foldLeft(new StringBuilder())(accumulate)
-
-      if (meta.partsExpected > 1) readNextMessage(msg1.dropWhile(_ != 0xff).dropWhile(_ == 0xff), messageBuilder)
-
       messageBuilder.toString()
     }.toEither.leftMap(t => SmoParseError(file, t.getMessage))
-  }
 
   def read(): Either[SmoReadError, SMS] =
-    readMeta(intStream).flatMap {
-      case (meta, stream1) =>
-        readFrom(stream1, 18).flatMap {
-          case (from, stream2) => readMessage(stream2, meta).map(message => SMS(file, from, meta, message))
-        }
-    }
+    for {
+      meta     <- readMeta()
+      segments <- (0 until meta.partsActual).toList.traverse(readSegment(_, meta.partsActual))
+    } yield SMS(file, meta, segments)
 }
