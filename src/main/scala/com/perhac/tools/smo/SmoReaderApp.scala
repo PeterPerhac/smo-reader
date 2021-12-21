@@ -29,24 +29,24 @@ object SmoReaderApp
           }
         }
 
-        val dirOpt: Opts[String] =
+        val inputDirOrFile: Opts[String] =
           option[String]("directory", help = "directory to scan for .smo files", short = "d")
+            .orElse(option[String]("file", help = "path to an .smo file", short = "f"))
 
         val verboseOpt: Opts[Boolean] =
           Opts.flag(long = "verbose", help = "Be more verbose in the output", short = "v").orFalse
 
-        (dirOpt, verboseOpt).mapN {
-          (dir, verbose) =>
-            val directory = File(dir)
-            if (!directory.isDirectory) {
-              System.err.println(s"$dir is not a directory")
+        (inputDirOrFile, verboseOpt).mapN {
+          (fileOrDir, verbose) =>
+            val input = File(fileOrDir)
+            if (!input.exists) {
+              System.err.println(s"$input does not exist!")
               System.exit(1)
             }
-            val smos = directory.list(_.extension.contains(".smo")).toVector.sortBy(_.nameWithoutExtension)
-            if (verbose) {
-              println(s"Scanning for SMO files in ${directory.pathAsString}")
-              println(s"Found ${smos.size} files:")
-              smos.foreach(println)
+            val smos = if (input.isDirectory){
+              input.list(_.extension.contains(".smo")).toVector.sortBy(_.nameWithoutExtension)
+            } else {
+              if (input.isRegularFile) Vector(input) else Vector.empty[File]
             }
             val (errors, messages): (Vector[SmoReadError], Vector[SMS]) = smos.map(processSmo).partitionEither(identity)
             if (verbose) {

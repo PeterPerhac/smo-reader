@@ -29,11 +29,11 @@ class SmoReader(buffer: Array[Int], file: File) {
   def readSegment(idx: Int, totalCount: Int): Either[SmoReadError, Segment] =
     safePerform {
       val segmentStart = 16 + (idx * 11 * 16)
-      val segmentStatus = SegmentStatus(buffer(segmentStart + 0)) // the very first byte of the segment, so +0
+      val segmentStatus = SegmentStatus(buffer(segmentStart))
       val skip = 2 + buffer(segmentStart + 1) + 3 //[status][len][1,2,3...len][dummy][dummy]
       val addressType = AddressType(buffer(segmentStart + skip))
       val phoneNumberSemiOctets = buffer(segmentStart + skip - 1)
-      val phoneNumberBytes = Math.ceil(phoneNumberSemiOctets / 2).toInt
+      val phoneNumberBytes = Math.ceil(phoneNumberSemiOctets.toDouble / 2).toInt
       val phoneStartIdx = segmentStart + skip + 1
       val phoneNumber: Array[Int] = buffer.slice(phoneStartIdx, phoneStartIdx + phoneNumberBytes)
       val telNum = phoneNumber.foldLeft("")((tel, c) => tel + f"$c%02X".reverse)
@@ -44,30 +44,24 @@ class SmoReader(buffer: Array[Int], file: File) {
       val dumbFillerLength = if (totalCount > 1) 7 else 0
       val messageStart = messageLengthOffset + 1 + dumbFillerLength
       val messageBytes = buffer.slice(messageStart, messageLengthOffset + messageLen + 1)
-      val message = messageBytes.foldLeft(new StringBuilder())(accumulate).toString
+      val message = messageBytes
+        .foldLeft(new StringBuilder()) {
+          case (sb, byte) =>
+            byte match {
+              case zero if zero == 0x00           => sb
+              case linebreak if linebreak == 0x0d => sb.append("\n")
+              case int                            => sb.append(int.toChar)
+            }
+        }
+        .toString
 
       Segment(idx, segmentStatus, formattedNumber, message)
     }
-
-  val accumulate: (StringBuilder, Int) => StringBuilder = {
-    case (sb, byte) =>
-      byte match {
-        case zero if zero == 0x00           => sb
-        case linebreak if linebreak == 0x0d => sb.append("\n")
-        case int                            => sb.append(int.toChar)
-      }
-  }
-
-  def readMessage(buffer: Array[Int], meta: Meta): Either[SmoReadError, String] =
-    Try {
-      val msg1 = if (meta.partsExpected > 1) buffer.drop(11) else buffer.drop(4)
-      val messageBuilder = msg1.takeWhile(_ != 0xff).foldLeft(new StringBuilder())(accumulate)
-      messageBuilder.toString()
-    }.toEither.leftMap(t => SmoParseError(file, t.getMessage))
 
   def read(): Either[SmoReadError, SMS] =
     for {
       meta     <- readMeta()
       segments <- (0 until meta.partsActual).toList.traverse(readSegment(_, meta.partsActual))
     } yield SMS(file, meta, segments)
+
 }
