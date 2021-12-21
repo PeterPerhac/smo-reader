@@ -44,18 +44,12 @@ class SmoReader(buffer: Array[Int], file: File) {
       val dumbFillerLength = if (totalCount > 1) 7 else 0
       val messageStart = messageLengthOffset + 1 + dumbFillerLength
       val messageBytes = buffer.slice(messageStart, messageLengthOffset + messageLen + 1)
-      val message = messageBytes
-        .foldLeft(new StringBuilder()) {
-          case (sb, byte) =>
-            byte match {
-              case zero if zero == 0x00           => sb
-              case linebreak if linebreak == 0x0d => sb.append("\n")
-              case int                            => sb.append(int.toChar)
-            }
-        }
-        .toString
+      val messageBuilder = messageBytes.grouped(2).foldLeft(new StringBuilder()) { (sb, a) =>
+        val c: Char = (a(0) << 8 | a(1)).toChar
+        if (c == 0x0d) sb.append("\n") else sb.append(c)
+      }
 
-      Segment(idx, segmentStatus, formattedNumber, message)
+      Segment(idx, segmentStatus, formattedNumber, messageBuilder.toString)
     }
 
   def read(): Either[SmoReadError, SMS] =
