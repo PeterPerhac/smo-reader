@@ -80,7 +80,7 @@ object SMS {
   implicit object SMSShow extends Show[SMS] {
     override def show(sms: SMS): String =
       s"""File: ${sms.file.pathAsString}
-         |\tFrom = ${sms.phoneNumber}
+         |\tPhone number = ${sms.phoneNumber}
          |\t${sms.meta.partsActual} of ${sms.meta.partsExpected} parts
          |\tSMS Type = ${sms.meta.smsType}, Status = ${sms.meta.smsStatus}
          |\tMessage =

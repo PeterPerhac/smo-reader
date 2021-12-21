@@ -53,7 +53,7 @@ Output:
 
 ```
 File: /Users/peterperhac/my/scala/smo-reader/my-smos/13_01_2004_20_14_12_MobileMSG73.smo
-	From = 0905406915
+	Phone number = 0905406915
 	3 of 3 parts
 	SMS Type = Outgoing, Status = Unsent
 	Message =
